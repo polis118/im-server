@@ -2,6 +2,7 @@ package utb.fai;
 
 import java.io.*;
 import java.net.*;
+import java.util.List;
 import java.util.concurrent.*;
 
 public class SocketHandler {
@@ -10,6 +11,7 @@ public class SocketHandler {
 
 	/** client ID je øetìzec ve formátu <IP_adresa>:<port> */
 	String clientID;
+	String name;
 
 	/**
 	 * activeHandlers je reference na mnoinu vech právì bìících SocketHandlerù.
@@ -56,10 +58,10 @@ public class SocketHandler {
 				startSignal.await();
 				System.err.println("DBG>Output handler running for " + clientID);
 				writer = new OutputStreamWriter(mySocket.getOutputStream(), "UTF-8");
-				writer.write("\nYou are connected from " + clientID + "\n");
+				//writer.write("\nYou are connected from " + clientID + "\n");
 				writer.flush();
 				while (!inputFinished) {
-					String m = messages.take();// blokující ètení - pokud není ve frontì zpráv nic, uspi se!
+					String m = messages.take();// blokující čtení - pokud není ve frontě zpráv nic, uspi se!
 					writer.write(m + "\r\n"); // pokud nìjaké zprávy od ostatních máme,
 					writer.flush(); // poleme je naemu klientovi
 					System.err.println("DBG>Message sent to " + clientID + ":" + m + "\n");
@@ -88,13 +90,75 @@ public class SocketHandler {
 				 * v okamiku, kdy nás Thread pool spustí, pøidáme se do mnoiny
 				 * vech aktivních handlerù, aby chodily zprávy od ostatních i nám
 				 */
-				activeHandlers.add(SocketHandler.this);
+				//activeHandlers.add(SocketHandler.this);
 				BufferedReader reader = new BufferedReader(new InputStreamReader(mySocket.getInputStream(), "UTF-8"));
+				PrintWriter writer = new PrintWriter(mySocket.getOutputStream(), true);
+				writer.println("Please input your name (name cannot contain space): ");
+				while((request = reader.readLine()) != null){
+
+					if(activeHandlers.add(SocketHandler.this,request)){
+						//System.out.println("Client " + clientID + " set name to " + request);
+						writer.println("Name set to: " + request);
+						break;
+					}
+					else{
+						writer.println("Non valid name entered. Name is already taken or contains forbiden character(space). Please input another name: ");
+					}
+				}
+				name = activeHandlers.handlerToName(SocketHandler.this);
+				activeHandlers.joinRoom("public", name);
 				while ((request = reader.readLine()) != null) { // pøila od mého klienta nìjaká zpráva?
-					// ano - poli ji vem ostatním klientùm
-					request = "From client " + clientID + ": " + request;
-					System.out.println(request);
-					activeHandlers.sendMessageToAll(SocketHandler.this, request);
+					if(request.startsWith("#setMyName ")){
+						if(activeHandlers.setName(SocketHandler.this,request.substring("#setMyName ".length()))){
+							name = request.substring("#setMyName ".length());
+							System.out.println("Client " + clientID + " set name to " + name);
+							activeHandlers.sendMessageToAll(name, "Client " + clientID + " set name to " + name);
+						}
+						else{
+							writer.println("Non valid name entered. Name is already taken or contains forbiden character(space).");
+						}
+
+					}
+					else if(request.startsWith("#sendPrivate ")){
+						String[] parts = request.split(" ", 3);
+						if(parts.length == 3){
+							if(!activeHandlers.sentMessageToName(name,parts[2],parts[1])){
+								writer.println("Client " + parts[1] + " is not connected or his message queue is full.");
+							}
+						}
+						else{
+							writer.println("Invalid command. Usage: #sendPrivate <name> <message>");
+						}
+
+					}
+					else if(request.startsWith("#join ")){
+						activeHandlers.joinRoom(request.substring("#join ".length()),name);
+						writer.println("Joined room " + request.substring("#join ".length()));
+					}
+					else if(request.startsWith("#leave ")){
+						if(activeHandlers.leaveRoom(request.substring("#leave ".length()),name)){
+							writer.println("Left room " + request.substring("#leave ".length()));
+						}
+						else{
+							writer.println("You are not in room " + request.substring("#leave ".length()));
+						}
+					}
+					else if(request.startsWith("#groups")){
+						List<String> groups = activeHandlers.getRoomList(name);
+						if(groups.size() == 1){
+							writer.println(groups.get(0));
+						}
+						else{
+							writer.println(String.join(",", groups));
+						}
+
+					}
+					else{
+						List<String> groups = activeHandlers.getRoomList(name);
+						for(String group : groups){
+							activeHandlers.sentMessageToRoom(name,request,group);
+						}
+					}
 				}
 				inputFinished = true;
 				messages.offer("OutputHandler, wakeup and die!");
@@ -114,4 +178,5 @@ public class SocketHandler {
 		}
 
 	}
+
 }
